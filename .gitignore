@@ -1,0 +1,52 @@
+# ==========================================================
+# MDG - Git Ignore
+# ==========================================================
+
+# Variáveis de ambiente
+.env
+.env.*
+
+# Exceção: manter o exemplo
+!.env.example
+
+
+# Dependências
+node_modules/
+
+
+# Credenciais Google OAuth
+credentials/*.json
+
+
+# Tokens / autenticação
+auth/*
+
+
+# Estado da aplicação
+data/*.json
+
+
+# Logs
+*.log
+logs/
+
+
+# Arquivos temporários
+*.tmp
+*.temp
+
+
+# Sistema operacional
+.DS_Store
+Thumbs.db
+
+
+# Editor / IDE
+.vscode/
+.idea/
+
+
+# Arquivos de debug
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
