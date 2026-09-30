@@ -4,10 +4,10 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const { google } = require('googleapis');
-const { authenticate } = require('@google-cloud/local-auth');
 
 const config = require('../config');
 const logger = require('../logger');
+const { authenticateGmail } = require('./auth');
 
 const gmailLogger = logger.child('GMAIL_CLIENT');
 
@@ -34,10 +34,12 @@ function validateCredentials() {
 
 /**
  * Cria um cliente autenticado da Gmail API.
+ *
+ * A autenticação é realizada pelo módulo auth.js,
+ * que utiliza o token OAuth salvo em credentials/token.json.
  */
 async function createGmailClient() {
-  const credentialsPath =
-    validateCredentials();
+  const credentialsPath = validateCredentials();
 
   const tokenPath = path.resolve(
     config.gmail.tokenPath
@@ -64,11 +66,13 @@ async function createGmailClient() {
   );
 
   try {
-    const auth = await authenticate({
-      scopes: SCOPES,
-      keyfilePath: credentialsPath,
-      tokenPath,
-    });
+    /**
+     * O auth.js:
+     * - carrega o credentials.json;
+     * - reutiliza o token.json se existir;
+     * - realiza OAuth somente se necessário.
+     */
+    const auth = await authenticateGmail();
 
     const gmail = google.gmail({
       version: 'v1',

@@ -1,18 +1,29 @@
+
 'use strict';
 
 const config = require('./config');
 const logger = require('./logger');
 
-const { registerGlobalErrorHandlers } = require('./errors');
+const {
+  registerGlobalErrorHandlers,
+} = require('./errors');
 
-const { createGmailClient } = require('./gmail/client');
+const {
+  createGmailClient,
+} = require('./gmail/client');
+
 const {
   fetchNewMessages,
   getMessage,
 } = require('./gmail/service');
 
-const { parseGmailMessage } = require('./parser/email');
-const { sanitizeEmail } = require('./security/sanitizer');
+const {
+  parseGmailMessage,
+} = require('./parser/email');
+
+const {
+  sanitizeEmail,
+} = require('./security/sanitizer');
 
 const {
   loadState,
@@ -21,14 +32,27 @@ const {
   markProcessed,
 } = require('./state/store');
 
-const { formatAlert } = require('./formatter/alert');
+const {
+  formatAlert,
+} = require('./formatter/alert');
 
 const WhatsAppClient = require('./whatsapp/client');
 const Scheduler = require('./scheduler');
+const CheckpointScheduler = require('./scheduler/checkpoint');
+const { createOperatingWindowGuard } = require('./scheduler/operating-window');
+
+const {
+  captureAll,
+} = require('./checkpoint/capture');
+
+const {
+  formatCheckpointMessage,
+} = require('./checkpoint/formatter');
 
 const appLogger = logger.child('APP');
 
 let scheduler;
+let checkpointScheduler;
 let shuttingDown = false;
 
 /**
@@ -45,7 +69,6 @@ async function processEmails(gmail, whatsapp, state) {
 
     if (!messages.length) {
       appLogger.debug('Nenhuma mensagem encontrada.');
-
       return;
     }
 
@@ -69,9 +92,7 @@ async function processEmails(gmail, whatsapp, state) {
       if (hasProcessed(state, messageId)) {
         appLogger.debug(
           'Mensagem já processada. Ignorando.',
-          {
-            messageId,
-          }
+          { messageId }
         );
 
         continue;
@@ -80,9 +101,7 @@ async function processEmails(gmail, whatsapp, state) {
       try {
         appLogger.info(
           'Processando nova mensagem.',
-          {
-            messageId,
-          }
+          { messageId }
         );
 
         /**
@@ -117,17 +136,30 @@ async function processEmails(gmail, whatsapp, state) {
 
         /**
          * Envia para o bot WhatsApp existente.
+         *
+         * Se o WhatsApp estiver desabilitado,
+         * o próprio cliente deve tratar essa condição.
          */
-        await whatsapp.sendMessage(alert);
+        const sendResult = await whatsapp.sendMessage(alert);
+
+        /**
+         * Não marca como processado quando o envio
+         * foi ignorado por a integração estar desabilitada.
+         */
+        if (sendResult?.skipped) {
+          appLogger.warn(
+            'Mensagem não enviada ao WhatsApp. Mantida pendente.',
+            { messageId }
+          );
+
+          continue;
+        }
 
         /**
          * Só marca como processado depois que
          * o envio foi concluído com sucesso.
          */
-        markProcessed(
-          state,
-          messageId
-        );
+        markProcessed(state, messageId);
 
         stateChanged = true;
 
@@ -170,6 +202,108 @@ async function processEmails(gmail, whatsapp, state) {
       error
     );
   }
+}
+
+/**
+ * Captura as telas e prepara as mensagens dos checkpoints.
+ *
+ * Nesta etapa, as mensagens são registradas nos logs.
+ * O envio pelo WhatsApp será integrado posteriormente.
+ */
+async function processCheckpoints(whatsapp) {
+  if (!config.checkpoint.enabled) {
+    return;
+  }
+
+  appLogger.info(
+    'Iniciando processamento dos checkpoints.'
+  );
+
+  const results = await captureAll();
+
+  const checkpoints = [
+    {
+      tool: 'gmail',
+      screenshotPath: results.gmail,
+    },
+    {
+      tool: 'grafana',
+      screenshotPath: results.grafana,
+    },
+  ];
+
+  for (const checkpoint of checkpoints) {
+    if (!checkpoint.screenshotPath) {
+      appLogger.warn(
+        'Checkpoint sem screenshot. Ignorando mensagem.',
+        {
+          tool: checkpoint.tool,
+        }
+      );
+
+      continue;
+    }
+
+    const message = formatCheckpointMessage(
+      checkpoint.tool
+    );
+
+    appLogger.info(
+      'Checkpoint preparado.',
+      {
+        tool: checkpoint.tool,
+        screenshotPath: checkpoint.screenshotPath,
+        message,
+      }
+    );
+
+    try {
+      appLogger.info(
+        'Enviando checkpoint para o WhatsApp.',
+        {
+          tool: checkpoint.tool,
+          screenshotPath: checkpoint.screenshotPath,
+        }
+      );
+
+      const sendResult = await whatsapp.sendCheckpoint(
+        message,
+        checkpoint.screenshotPath
+      );
+
+      if (sendResult?.skipped) {
+        appLogger.warn(
+          'Checkpoint não enviado ao WhatsApp. Integração desabilitada.',
+          {
+            tool: checkpoint.tool,
+          }
+        );
+      } else {
+        appLogger.info(
+          'Checkpoint enviado ao WhatsApp com sucesso.',
+          {
+            tool: checkpoint.tool,
+          }
+        );
+      }
+    } catch (error) {
+      appLogger.error(
+        'Erro ao enviar checkpoint ao WhatsApp.',
+        {
+          tool: checkpoint.tool,
+          error: {
+            name: error.name,
+            message: error.message,
+            stack: error.stack,
+          },
+        }
+      );
+    }
+  }
+
+  appLogger.info(
+    'Processamento dos checkpoints concluído.'
+  );
 }
 
 /**
@@ -224,24 +358,53 @@ async function main() {
   );
 
   /**
-   * Cria o scheduler.
+   * Cria o agendador de monitoramento do Gmail.
    */
   scheduler = new Scheduler(
-    () => processEmails(
-      gmail,
-      whatsapp,
-      state
+    createOperatingWindowGuard(
+      () => processEmails(
+        gmail,
+        whatsapp,
+        state
+      ),
+      'gmail'
     ),
     config.gmail.pollingInterval
   );
 
   /**
-   * Inicia o processamento.
+   * Inicia o monitoramento do Gmail.
    *
-   * O Scheduler também executa imediatamente
-   * o primeiro ciclo.
+   * O Scheduler executa o primeiro ciclo imediatamente.
    */
   scheduler.start();
+
+  /**
+   * Cria e inicia o agendador de checkpoints.
+   */
+  if (config.checkpoint.enabled) {
+    checkpointScheduler = new CheckpointScheduler(
+      () => processCheckpoints(whatsapp),
+      config.checkpoint.interval
+    );
+
+    /**
+     * O CheckpointScheduler mantém os checkpoints
+     * alinhados ao início de cada hora.
+     */
+    checkpointScheduler.start();
+
+    appLogger.info(
+      'Agendador de checkpoints iniciado.',
+      {
+        interval: config.checkpoint.interval,
+      }
+    );
+  } else {
+    appLogger.info(
+      'Captura de checkpoints desabilitada.'
+    );
+  }
 
   appLogger.info(
     'MDG iniciado com sucesso.'
@@ -264,6 +427,10 @@ async function shutdown(signal) {
 
   if (scheduler) {
     scheduler.stop();
+  }
+
+  if (checkpointScheduler) {
+    checkpointScheduler.stop();
   }
 
   appLogger.info(
