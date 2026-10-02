@@ -164,6 +164,9 @@ async function captureGmail() {
   await page.screenshot({
     path: screenshotPath,
     fullPage: true,
+    timeout: 60000,
+    animations: 'disabled',
+    style: '* { font-family: Arial, sans-serif !important; }',
   });
 
   checkpointLogger.info(
