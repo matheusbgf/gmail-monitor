@@ -54,28 +54,6 @@ const config = {
     level: getRequiredEnv('LOG_LEVEL'),
   },
 
-  gmail: {
-    credentialsPath: path.resolve(
-      getRequiredEnv('GMAIL_CREDENTIALS_PATH')
-    ),
-
-    tokenPath: path.resolve(
-      getRequiredEnv('GMAIL_TOKEN_PATH')
-    ),
-
-    query: getRequiredEnv('GMAIL_QUERY'),
-
-    maxResults: getNumberEnv(
-      'GMAIL_MAX_RESULTS',
-      20
-    ),
-
-    pollingInterval: getNumberEnv(
-      'GMAIL_POLLING_INTERVAL',
-      30000
-    ),
-  },
-
   whatsapp: {
     enabled: getBooleanEnv(
       'WHATSAPP_ENABLED',
@@ -100,12 +78,6 @@ const config = {
     apiTimeout: getNumberEnv(
       'WHATSAPP_API_TIMEOUT',
       10000
-    ),
-  },
-
-  state: {
-    path: path.resolve(
-      getRequiredEnv('STATE_PATH')
     ),
   },
 

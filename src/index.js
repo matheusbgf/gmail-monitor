@@ -1,4 +1,3 @@
-
 'use strict';
 
 const config = require('./config');
@@ -8,38 +7,8 @@ const {
   registerGlobalErrorHandlers,
 } = require('./errors');
 
-const {
-  createGmailClient,
-} = require('./gmail/client');
-
-const {
-  fetchNewMessages,
-  getMessage,
-} = require('./gmail/service');
-
-const {
-  parseGmailMessage,
-} = require('./parser/email');
-
-const {
-  sanitizeEmail,
-} = require('./security/sanitizer');
-
-const {
-  loadState,
-  saveState,
-  hasProcessed,
-  markProcessed,
-} = require('./state/store');
-
-const {
-  formatAlert,
-} = require('./formatter/alert');
-
 const WhatsAppClient = require('./whatsapp/client');
-const Scheduler = require('./scheduler');
 const CheckpointScheduler = require('./scheduler/checkpoint');
-const { createOperatingWindowGuard } = require('./scheduler/operating-window');
 
 const {
   captureAll,
@@ -51,164 +20,14 @@ const {
 
 const appLogger = logger.child('APP');
 
-let scheduler;
 let checkpointScheduler;
 let shuttingDown = false;
 
 /**
- * Processa as mensagens novas encontradas no Gmail.
- */
-async function processEmails(gmail, whatsapp, state) {
-  appLogger.debug('Iniciando ciclo de processamento.');
-
-  try {
-    const messages = await fetchNewMessages(gmail, {
-      query: config.gmail.query,
-      maxResults: config.gmail.maxResults,
-    });
-
-    if (!messages.length) {
-      appLogger.debug('Nenhuma mensagem encontrada.');
-      return;
-    }
-
-    appLogger.info(
-      `Mensagens encontradas: ${messages.length}`
-    );
-
-    let stateChanged = false;
-
-    for (const message of messages) {
-      const messageId = message.id;
-
-      if (!messageId) {
-        appLogger.warn(
-          'Mensagem recebida do Gmail sem ID. Ignorando.'
-        );
-
-        continue;
-      }
-
-      if (hasProcessed(state, messageId)) {
-        appLogger.debug(
-          'Mensagem já processada. Ignorando.',
-          { messageId }
-        );
-
-        continue;
-      }
-
-      try {
-        appLogger.info(
-          'Processando nova mensagem.',
-          { messageId }
-        );
-
-        /**
-         * Busca o conteúdo completo da mensagem.
-         */
-        const rawMessage = await getMessage(
-          gmail,
-          messageId
-        );
-
-        /**
-         * Faz o parsing do e-mail.
-         */
-        const parsedEmail = await parseGmailMessage(
-          rawMessage
-        );
-
-        /**
-         * Sanitiza o conteúdo antes de qualquer
-         * processamento ou envio externo.
-         */
-        const sanitizedEmail = sanitizeEmail(
-          parsedEmail
-        );
-
-        /**
-         * Gera a mensagem final do alerta.
-         */
-        const alert = formatAlert(
-          sanitizedEmail
-        );
-
-        /**
-         * Envia para o bot WhatsApp existente.
-         *
-         * Se o WhatsApp estiver desabilitado,
-         * o próprio cliente deve tratar essa condição.
-         */
-        const sendResult = await whatsapp.sendMessage(alert);
-
-        /**
-         * Não marca como processado quando o envio
-         * foi ignorado por a integração estar desabilitada.
-         */
-        if (sendResult?.skipped) {
-          appLogger.warn(
-            'Mensagem não enviada ao WhatsApp. Mantida pendente.',
-            { messageId }
-          );
-
-          continue;
-        }
-
-        /**
-         * Só marca como processado depois que
-         * o envio foi concluído com sucesso.
-         */
-        markProcessed(state, messageId);
-
-        stateChanged = true;
-
-        appLogger.info(
-          'Mensagem processada com sucesso.',
-          {
-            messageId,
-            subject: sanitizedEmail.subject,
-          }
-        );
-      } catch (error) {
-        /**
-         * O erro de uma mensagem não deve interromper
-         * o processamento das demais.
-         */
-        appLogger.error(
-          'Erro ao processar mensagem.',
-          {
-            messageId,
-            error: {
-              name: error.name,
-              message: error.message,
-              stack: error.stack,
-            },
-          }
-        );
-      }
-    }
-
-    /**
-     * Persiste o estado somente quando houve
-     * alguma alteração.
-     */
-    if (stateChanged) {
-      saveState(state);
-    }
-  } catch (error) {
-    appLogger.error(
-      'Erro durante o ciclo de processamento do Gmail.',
-      error
-    );
-  }
-}
-
-/**
- * Captura as telas e prepara as mensagens dos checkpoints.
+ * Processa os checkpoints.
  *
- * Nesta etapa, as mensagens são registradas nos logs.
- * O envio pelo WhatsApp será integrado posteriormente.
+ * Captura Gmail e Grafana e envia os screenshots
+ * para o bot WhatsApp remoto.
  */
 async function processCheckpoints(whatsapp) {
   if (!config.checkpoint.enabled) {
@@ -315,22 +134,13 @@ async function main() {
   appLogger.info(
     `Iniciando ${config.app.name}.`,
     {
-      environment: config.app.environment,
+      nodeEnv: config.app.nodeEnv,
       logLevel: config.log.level,
     }
   );
 
   /**
-   * Inicializa o cliente Gmail.
-   */
-  const gmail = await createGmailClient();
-
-  appLogger.info(
-    'Cliente Gmail inicializado.'
-  );
-
-  /**
-   * Inicializa o cliente HTTP do WhatsApp.
+   * Inicializa o cliente HTTP do WhatsApp remoto.
    */
   const whatsapp = new WhatsAppClient();
 
@@ -347,37 +157,6 @@ async function main() {
       'Integração com bot WhatsApp desabilitada.'
     );
   }
-
-  /**
-   * Carrega o estado persistido.
-   */
-  const state = loadState();
-
-  appLogger.info(
-    'Estado da aplicação carregado.'
-  );
-
-  /**
-   * Cria o agendador de monitoramento do Gmail.
-   */
-  scheduler = new Scheduler(
-    createOperatingWindowGuard(
-      () => processEmails(
-        gmail,
-        whatsapp,
-        state
-      ),
-      'gmail'
-    ),
-    config.gmail.pollingInterval
-  );
-
-  /**
-   * Inicia o monitoramento do Gmail.
-   *
-   * O Scheduler executa o primeiro ciclo imediatamente.
-   */
-  scheduler.start();
 
   /**
    * Cria e inicia o agendador de checkpoints.
@@ -424,10 +203,6 @@ async function shutdown(signal) {
   appLogger.info(
     `Sinal ${signal} recebido. Encerrando aplicação.`
   );
-
-  if (scheduler) {
-    scheduler.stop();
-  }
 
   if (checkpointScheduler) {
     checkpointScheduler.stop();

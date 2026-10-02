@@ -7,19 +7,15 @@
   "scripts": {
     "start": "node src/index.js",
     "dev": "node --watch src/index.js",
-    "test": "node --test",
-    "auth:gmail": "node src/gmail/auth.js"
+    "test": "node --test"
   },
   "engines": {
     "node": ">=20"
   },
   "dependencies": {
-    "@google-cloud/local-auth": "^3.0.1",
     "@hapi/boom": "^10.0.1",
     "@whiskeysockets/baileys": "6.7.24",
     "dotenv": "^16.6.1",
-    "googleapis": "^181.0.0",
-    "mailparser": "^3.7.4",
     "pino": "^9.9.4",
     "playwright": "^1.63.0",
     "qrcode-terminal": "^0.12.0"
