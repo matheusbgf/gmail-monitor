@@ -104,6 +104,19 @@ const config = {
       true
     ),
 
+    browserCdpEnabled: getBooleanEnv(
+      'CHECKPOINT_BROWSER_CDP_ENABLED',
+      false
+    ),
+
+    browserCdpEndpoint:
+      process.env.CHECKPOINT_BROWSER_CDP_ENDPOINT ||
+      'http://127.0.0.1:9222',
+
+    browserExecutable:
+      process.env.CHECKPOINT_CHROME_EXECUTABLE ||
+      'google-chrome-stable',
+
     browserDataDir: path.resolve(
       getRequiredEnv(
         'CHECKPOINT_BROWSER_DATA_DIR'

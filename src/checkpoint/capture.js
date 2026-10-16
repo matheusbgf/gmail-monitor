@@ -15,6 +15,7 @@ const checkpointLogger =
   logger.child('CHECKPOINT_CAPTURE');
 
 let browserContext = null;
+let browserConnection = null;
 
 function getScreenshotDir() {
   return path.resolve(
@@ -42,27 +43,61 @@ async function getBrowserContext() {
   );
 
   checkpointLogger.info(
-    'Iniciando o perfil persistente do navegador.',
+    'Iniciando o navegador de captura.',
     {
-      headless: config.checkpoint.browserHeadless,
+      mode: config.checkpoint.browserCdpEnabled
+        ? 'chrome-cdp'
+        : 'persistent-playwright',
+      headless: config.checkpoint.browserCdpEnabled
+        ? false
+        : config.checkpoint.browserHeadless,
       dataDir: config.checkpoint.browserDataDir,
     }
   );
 
-  browserContext =
-    await chromium.launchPersistentContext(
-      config.checkpoint.browserDataDir,
+  if (config.checkpoint.browserCdpEnabled) {
+    browserConnection =
+      await chromium.connectOverCDP(
+        config.checkpoint.browserCdpEndpoint,
+        {
+          timeout: 30000,
+          isLocal: true,
+        }
+      );
+
+    browserContext =
+      browserConnection.contexts()[0] || null;
+
+    if (!browserContext) {
+      await browserConnection.close();
+      browserConnection = null;
+      throw new Error(
+        'Chrome conectou pela porta de depuração, mas não disponibilizou o perfil padrão.'
+      );
+    }
+
+    checkpointLogger.info(
+      'Conectado ao Chrome iniciado pelo npm start.',
       {
-        headless: config.checkpoint.browserHeadless,
-        viewport: {
-          width: 1920,
-          height: 1080,
-        },
+        endpoint: config.checkpoint.browserCdpEndpoint,
       }
     );
+  } else {
+    browserContext =
+      await chromium.launchPersistentContext(
+        config.checkpoint.browserDataDir,
+        {
+          headless: config.checkpoint.browserHeadless,
+          viewport: {
+            width: 1920,
+            height: 1080,
+          },
+        }
+      );
+  }
 
   checkpointLogger.info(
-    'Perfil persistente do navegador iniciado.'
+    'Contexto do navegador pronto.'
   );
 
   return browserContext;
@@ -267,14 +302,20 @@ async function captureAll() {
 
 async function closeBrowser() {
   const context = browserContext;
+  const connection = browserConnection;
   browserContext = null;
+  browserConnection = null;
 
-  if (context) {
+  if (connection) {
+    await connection.close();
+  } else if (context) {
     await context.close();
   }
 
   checkpointLogger.info(
-    'Perfil persistente do navegador encerrado.'
+    connection
+      ? 'Conexão com o Chrome encerrada.'
+      : 'Perfil persistente do navegador encerrado.'
   );
 }
 
