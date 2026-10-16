@@ -12,6 +12,7 @@ const CheckpointScheduler = require('./scheduler/checkpoint');
 
 const {
   captureAll,
+  closeBrowser,
 } = require('./checkpoint/capture');
 
 const {
@@ -206,6 +207,15 @@ async function shutdown(signal) {
 
   if (checkpointScheduler) {
     checkpointScheduler.stop();
+  }
+
+  try {
+    await closeBrowser();
+  } catch (error) {
+    appLogger.warn(
+      'Não foi possível encerrar o perfil persistente do navegador.',
+      error
+    );
   }
 
   appLogger.info(

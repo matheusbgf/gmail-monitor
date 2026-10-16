@@ -25,7 +25,7 @@ function formatCheckpointMessage(tool) {
     '',
     '⏱️ Período das últimas 1 horas.',
     '',
-    'Equipe SOC',
+    'Equipe BOC',
     'Core | Technologies',
   ].join('\n');
 }

@@ -3,13 +3,26 @@
 const { chromium } = require('playwright');
 
 const config = require('../config');
+const {
+  ensurePrivateBrowserProfile,
+} = require('./profile');
 
 async function main() {
+  if (!config.checkpoint.browserHeadless) {
+    throw new Error(
+      'Defina CHECKPOINT_BROWSER_HEADLESS=true para manter a autenticação sem interface gráfica.'
+    );
+  }
+
+  ensurePrivateBrowserProfile(
+    config.checkpoint.browserDataDir
+  );
+
   const context =
     await chromium.launchPersistentContext(
       config.checkpoint.browserDataDir,
       {
-        headless: false,
+        headless: config.checkpoint.browserHeadless,
         viewport: {
           width: 1920,
           height: 1080,
@@ -17,36 +30,31 @@ async function main() {
       }
     );
 
-  const page = await context.newPage();
+  try {
+    const page = context.pages()[0] || await context.newPage();
 
-  await page.goto(
-    config.checkpoint.gmailUrl,
-    {
-      waitUntil: 'domcontentloaded',
-      timeout: 60000,
-    }
-  );
+    await page.goto(
+      config.checkpoint.gmailUrl,
+      {
+        waitUntil: 'domcontentloaded',
+        timeout: 60000,
+      }
+    );
 
-  console.log(
-    'Faça o login manualmente no Gmail.'
-  );
+    await page.waitForTimeout(3000);
 
-  console.log(
-    'Quando a caixa de entrada estiver aberta, pressione ENTER neste terminal.'
-  );
-
-  process.stdin.setEncoding('utf8');
-
-  process.stdin.once(
-    'data',
-    async () => {
-      await context.close();
-
-      console.log(
-        'Sessão do Gmail salva com sucesso.'
+    if (new URL(page.url()).hostname !== 'mail.google.com') {
+      throw new Error(
+        'O perfil salvo não está autenticado no Gmail. Este script só valida sessões existentes; não automatiza o login do Google nem contorna MFA ou SSO.'
       );
     }
-  );
+
+    console.log(
+      'Sessão existente do Gmail validada sem interface gráfica.'
+    );
+  } finally {
+    await context.close();
+  }
 }
 
 main().catch((error) => {

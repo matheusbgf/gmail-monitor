@@ -7,14 +7,13 @@ const { chromium } = require('playwright');
 
 const config = require('../config');
 const logger = require('../logger');
+const {
+  ensurePrivateBrowserProfile,
+} = require('./profile');
 
 const checkpointLogger =
   logger.child('CHECKPOINT_CAPTURE');
 
-const CHROME_CDP_URL =
-  'http://127.0.0.1:9222';
-
-let browser = null;
 let browserContext = null;
 
 function getScreenshotDir() {
@@ -38,32 +37,32 @@ async function getBrowserContext() {
   }
 
   ensureDirectories();
+  ensurePrivateBrowserProfile(
+    config.checkpoint.browserDataDir
+  );
 
   checkpointLogger.info(
-    'Conectando ao Chrome existente.',
+    'Iniciando o perfil persistente do navegador.',
     {
-      endpoint: CHROME_CDP_URL,
+      headless: config.checkpoint.browserHeadless,
+      dataDir: config.checkpoint.browserDataDir,
     }
   );
 
-  browser =
-    await chromium.connectOverCDP(
-      CHROME_CDP_URL
+  browserContext =
+    await chromium.launchPersistentContext(
+      config.checkpoint.browserDataDir,
+      {
+        headless: config.checkpoint.browserHeadless,
+        viewport: {
+          width: 1920,
+          height: 1080,
+        },
+      }
     );
-
-  const contexts =
-    browser.contexts();
-
-  if (!contexts.length) {
-    throw new Error(
-      'Nenhum contexto encontrado no Chrome.'
-    );
-  }
-
-  browserContext = contexts[0];
 
   checkpointLogger.info(
-    'Conectado ao Chrome existente.'
+    'Perfil persistente do navegador iniciado.'
   );
 
   return browserContext;
@@ -97,6 +96,16 @@ async function capturePage(
 
   await page.waitForTimeout(3000);
 
+  const currentUrl = new URL(page.url());
+  if (
+    currentUrl.hostname === 'accounts.google.com' ||
+    /\/(login|signin)\/?$/i.test(currentUrl.pathname)
+  ) {
+    throw new Error(
+      `Sessão não autenticada para ${filename}; o perfil salvo precisa de autorização.`
+    );
+  }
+
   const screenshotPath =
     path.join(
       getScreenshotDir(),
@@ -126,34 +135,43 @@ async function captureGmail() {
   const context =
     await getBrowserContext();
 
-  const pages =
-    context.pages();
-
-  const page =
-    pages.find(
+  const pages = context.pages();
+  const page = pages.find(
       currentPage =>
         currentPage
           .url()
           .includes(
             'mail.google.com/mail/'
           )
-    );
-
-  if (!page) {
-    throw new Error(
-      'Aba autenticada do Gmail não encontrada no Chrome.'
-    );
-  }
+    ) || pages[0] || await context.newPage();
 
   checkpointLogger.info(
-    'Aba autenticada do Gmail encontrada.',
+    'Abrindo Gmail com o perfil persistente.',
     {
-      url: page.url(),
-      title: await page.title(),
+      url: config.checkpoint.gmailUrl,
     }
   );
 
+  await page.goto(
+    config.checkpoint.gmailUrl,
+    {
+      waitUntil: 'domcontentloaded',
+      timeout: 60000,
+    }
+  );
+
+  checkpointLogger.info(
+    'Página do Gmail carregada.'
+  );
+
   await page.waitForTimeout(3000);
+
+  const currentUrl = new URL(page.url());
+  if (currentUrl.hostname !== 'mail.google.com') {
+    throw new Error(
+      'Sessão do Gmail não autenticada; o perfil salvo precisa de autorização.'
+    );
+  }
 
   const screenshotPath =
     path.join(
@@ -248,11 +266,15 @@ async function captureAll() {
 }
 
 async function closeBrowser() {
+  const context = browserContext;
   browserContext = null;
-  browser = null;
+
+  if (context) {
+    await context.close();
+  }
 
   checkpointLogger.info(
-    'Conexão com o Chrome encerrada.'
+    'Perfil persistente do navegador encerrado.'
   );
 }
 
